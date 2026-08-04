@@ -20,23 +20,51 @@
   #{:mon :tue :wed :thu :fri :sat :sun})
 
 (defn hhmm->minutes
-  "\"HH:MM\" → minutes since midnight, or nil when malformed/out of range."
+  "\"HH:MM\" → minutes since midnight, or nil when malformed/out of range.
+
+  **\"24:00\" is accepted and means 1440 (end of day).** Shops routinely write
+  a midnight close as 24:00, and rejecting it made \"09:00–24:00\" —- an
+  ordinary late-night closing time — impossible to express at all. Only
+  \"24:00\" exactly is allowed at that hour; \"24:30\" is still malformed."
   [s]
   (when (string? s)
     (when-let [[_ h m] (re-matches #"(\d{2}):(\d{2})" s)]
       (let [h #?(:clj (Long/parseLong h) :cljs (js/parseInt h 10))
             m #?(:clj (Long/parseLong m) :cljs (js/parseInt m 10))]
-        (when (and (<= 0 h 23) (<= 0 m 59))
+        (when (or (and (<= 0 h 23) (<= 0 m 59))
+                  (and (= 24 h) (zero? m)))
           (+ (* 60 h) m))))))
 
 (defn hhmm-valid? [s] (some? (hhmm->minutes s)))
 
-(defn window-valid?
-  "A window is [\"HH:MM\" \"HH:MM\"] with open strictly before close."
+(defn- window-minutes
+  "[open close] as minutes, or nil when either end is malformed."
   [w]
-  (and (vector? w) (= 2 (count w))
-       (let [[o c] (map hhmm->minutes w)]
-         (and o c (< o c)))))
+  (when (and (vector? w) (= 2 (count w)))
+    (let [[o c] (map hhmm->minutes w)]
+      (when (and o c) [o c]))))
+
+(defn overnight-window?
+  "Does this window run past midnight (open after close, e.g. 22:00–02:00)?"
+  [w]
+  (boolean (when-let [[o c] (window-minutes w)] (> o c))))
+
+(defn window-valid?
+  "A window is [\"HH:MM\" \"HH:MM\"].
+
+  **open > close means the window runs past midnight** (22:00–02:00), which
+  is how convenience stores, izakaya and late-night pharmacies actually
+  trade. Requiring open < close made those shops unrepresentable — not
+  merely awkward to express, but rejected by `store` outright.
+
+  open must be a real time of day (24:00 cannot *open* anything) and close
+  must be after 00:00. open = close is rejected: it reads as either a
+  zero-length window or a 24-hour one, and guessing which would silently
+  pick the wrong answer for someone."
+  [w]
+  (boolean
+   (when-let [[o c] (window-minutes w)]
+     (and (< o 1440) (pos? c) (not= o c)))))
 
 (defn hours-valid?
   "An hours map is {day [[open close] ..]} — every key a weekday keyword,
@@ -64,7 +92,13 @@
   [id name address & {:keys [geo hours jurisdiction pickup-ready? status]}]
   (let [st (or status :active)
         hrs (or hours {})]
-    (when (and (contains? #{:active :suspended :closed} st)
+    ;; **id が空でも通していた。** `validate-store` は同じ入力を :missing-id で
+    ;; 弾くので、構築器と検証器が別々の答えを出していた —— 空 id の店が作れて
+    ;; しまうと、pickup-point の :pickup/store が指す先が無い参照になる
+    ;; （`pickup-point` は自分の store-id の空文字は拒否していたのに、店側は
+    ;; 空を許していた）。
+    (when (and (not (str/blank? (str id)))
+               (contains? #{:active :suspended :closed} st)
                (hours-valid? hrs)
                (or (nil? geo) (geo-valid? geo)))
       {:omise/id            id
@@ -78,17 +112,39 @@
 
 (defn active? [s] (= :active (:omise/status s)))
 
+(def ^:private previous-day
+  {:mon :sun :tue :mon :wed :tue :thu :wed :fri :thu :sat :fri :sun :sat})
+
 (defn open-at?
   "Is the store's hours table open at `day` (weekday keyword) and `hhmm`?
   Pure — the caller supplies the moment; a store with no windows for the
-  day (or an invalid time) is closed. Open is inclusive, close exclusive."
+  day (or an invalid time) is closed. Open is inclusive, close exclusive.
+
+  **A window that runs past midnight keeps the store open into the next
+  day.** A bar whose Friday window is 22:00–02:00 is open at Saturday
+  01:00, so this checks the *previous* day's overnight windows as well as
+  today's. Forgetting that half is the classic version of this bug: the
+  hours table looks right, and the shop reads as closed exactly during the
+  hours it is busiest."
   [store day hhmm]
   (boolean
    (when-let [t (hhmm->minutes hhmm)]
-     (some (fn [[o c]]
-             (let [om (hhmm->minutes o) cm (hhmm->minutes c)]
-               (and om cm (<= om t) (< t cm))))
-           (get (:omise/hours store) day)))))
+     (let [hours (:omise/hours store)
+           today (get hours day)
+           spilled (get hours (previous-day day))]
+       (or
+        ;; 当日の通常 window（open ≤ t < close）
+        (some (fn [w] (when-let [[o c] (window-minutes w)]
+                        (and (< o c) (<= o t) (< t c))))
+              today)
+        ;; 当日に開いて日を跨ぐ window の、当日側（open ≤ t < 24:00）
+        (some (fn [w] (when-let [[o c] (window-minutes w)]
+                        (and (> o c) (<= o t))))
+              today)
+        ;; 前日に開いて日を跨いだ window の、当日側（t < close）
+        (some (fn [w] (when-let [[o c] (window-minutes w)]
+                        (and (> o c) (< t c))))
+              spilled))))))
 
 (defn pickup-available?
   "Can a courier pick up at this store at `day`/`hhmm`? — the single
