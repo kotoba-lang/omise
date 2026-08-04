@@ -34,3 +34,31 @@
   (let [csv (ex/open-report->csv stores [:mon "10:00"])]
     (is (str/includes? csv "st-1,mon,10:00,yes,yes"))
     (is (str/includes? csv "st-2,mon,10:00,yes,no") "closed store is open by hours but not pickup-available")))
+
+
+;; ── 制御文字を含む実データでも壊れない出力 ──────────────────
+
+(def ^:private nasty-name
+  (str "Bob's \"Cafe\"" (char 9) "Tokyo" (char 13) (char 10) (char 1)))
+
+(deftest json-escapes-every-control-character
+  (testing "RFC 8259 は U+0020 未満の**すべて**のエスケープを要求する。
+            旧実装は backslash / quote / \\n だけを見ていたので、スプレッドシートから
+            貼られた店名にタブや CR が混ざると生の制御文字が JSON 文字列の中に
+            出て、**どのパーサも受け付けない出力**になっていた。"
+    (let [s (omise/store "s1" nasty-name "addr")
+          out (ex/stores->json [s])]
+      (is (not (some #(< (int %) 0x20) out))
+          "出力に生の制御文字が残っていない")
+      (is (str/includes? out "\\t"))
+      (is (str/includes? out "\\r"))
+      (is (str/includes? out "\\n"))
+      (is (str/includes? out "\\u0001"))
+      (is (str/includes? out "\\\"Cafe\\\"") "引用符は従来どおり"))))
+
+(deftest csv-quotes-carriage-returns
+  (testing "\\r が引用のトリガに入っていなかった。CR を行終端とみなす読み手には
+            1 行が 2 行に割れて見える。"
+    (let [s (omise/store "s1" (str "A" (char 13) "B") "addr")
+          out (ex/stores->csv [s])]
+      (is (str/includes? out (str "\"A" (char 13) "B\""))))))

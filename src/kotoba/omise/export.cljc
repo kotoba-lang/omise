@@ -6,19 +6,51 @@
   (:require [clojure.string :as str]
             [kotoba.omise :as omise]))
 
-(defn- csv-cell [v]
+(defn- csv-cell
+  "Quote a CSV cell per RFC 4180.
+
+  `\\r` was missing from the trigger set: a value containing a bare
+  carriage return went out unquoted and split the row for any reader that
+  treats CR as a line terminator."
+  [v]
   (let [s (str (if (nil? v) "" v))]
-    (if (re-find #"[\",\n]" s)
+    (if (re-find #"[\",\r\n]" s)
       (str "\"" (str/replace s "\"" "\"\"") "\"")
       s)))
 
 (defn- csv-row [vals] (str/join "," (map csv-cell vals)))
 
-(defn- json-str [v]
-  (-> (str (if (nil? v) "" v))
-      (str/replace "\\" "\\\\")
-      (str/replace "\"" "\\\"")
-      (str/replace "\n" "\\n")))
+(defn- u-escape [ch]
+  (let [hex #?(:clj (Integer/toHexString (int ch))
+               :cljs (.toString (.charCodeAt (str ch) 0) 16))]
+    (str "\\u" (subs (str "000" hex) (- (count (str "000" hex)) 4)))))
+
+(defn- json-str
+  "Escape a value for use inside a JSON string literal.
+
+  **RFC 8259 requires every code point below U+0020 to be escaped**, not
+  just newline. The previous version handled only backslash, quote and
+  `\\n`, so a store name containing a tab or a carriage return — ordinary
+  when the record came from a spreadsheet paste — emitted a raw control
+  character inside the string and produced output **no JSON parser will
+  accept**. The export looked fine right up to the moment something
+  downstream tried to read it."
+  [v]
+  (let [s (str (if (nil? v) "" v))]
+    (apply str
+           (map (fn [ch]
+                  (case ch
+                    \\ "\\\\"
+                    \" "\\\""
+                    \newline "\\n"
+                    \return "\\r"
+                    \tab "\\t"
+                    \formfeed "\\f"
+                    \backspace "\\b"
+                    (if (< #?(:clj (int ch) :cljs (.charCodeAt (str ch) 0)) 0x20)
+                      (u-escape ch)
+                      ch)))
+                s))))
 
 (defn stores->csv [stores]
   (str/join "\n"
