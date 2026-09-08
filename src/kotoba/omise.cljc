@@ -9,7 +9,7 @@
   open-at? checks, pickup points, and geo distance between two points.
 
   Portable (.cljc) across JVM / ClojureScript / SCI / GraalVM."
-  (:require [clojure.string :as str]))
+  (:require [kotoba.lang.text :as str]))
 
 ;; ---------------------------------------------------------------------------
 ;; Opening hours — weekly windows, pure time arithmetic (no clock)

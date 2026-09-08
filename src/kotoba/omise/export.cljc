@@ -3,7 +3,7 @@
 
   Renders stores and pickup points to CSV and JSON for audit and
   downstream reporting. Pure data → text: no network."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [kotoba.omise :as omise]))
 
 (defn- csv-cell
