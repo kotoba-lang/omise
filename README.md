@@ -82,7 +82,7 @@ escaped) for stores, pickup points and per-moment open reports.
 ## Test
 
 ```sh
-clojure -M:test
+kbb -M:test
 ```
 
 ## License
