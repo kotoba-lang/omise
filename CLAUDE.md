@@ -37,6 +37,6 @@ library。ネットワーク・I/O・**時計へのアクセスを一切持た�
 ## 検証
 
 ```bash
-clojure -M:test   # 19 tests / 82 assertions
-clojure -M:lint   # errors 0 / warnings 0
+kbb -M:test   # 19 tests / 82 assertions
+kbb -M:lint   # errors 0 / warnings 0
 ```
