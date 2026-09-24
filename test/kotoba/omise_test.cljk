@@ -1,5 +1,5 @@
 (ns kotoba.omise-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [kotoba.test :refer [deftest is testing]]
             [kotoba.omise :as omise]))
 
 (def hours {:mon [["09:00" "18:00"]]
